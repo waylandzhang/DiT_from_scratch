@@ -11,4 +11,5 @@ __阅读这个代码库的最佳方式是对应我录的视频来看，可以更
 ### 代码结构
 
 - `/vae_from_scratch`： VAE的原理实现
-- 更新中。。
+- `/diffusion_from_scratch`：DDPM的原理实现
+- `/stable_diffusion_from_scratch`：（更新中）Stable Diffusion的实现...
