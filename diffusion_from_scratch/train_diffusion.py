@@ -104,7 +104,7 @@ for epoch in range(n_epochs):
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(diffusion_model.parameters(), 1.0)  # 梯度裁剪
+        # torch.nn.utils.clip_grad_norm_(diffusion_model.parameters(), 1.0)  # 梯度裁剪
         optimizer.step()
         # scheduler.step()  # OneCycleLR 在每个批次后调用
 

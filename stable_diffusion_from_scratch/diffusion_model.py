@@ -176,15 +176,15 @@ class MiddleBlock(nn.Module):
         self.attn1 = SpatialTransformer(channels, context_dim, num_heads=channels//64, self_attn=True, cross_attn=True)  # 256/64=4
         self.resnet2 = ResnetBlock(channels, channels, time_dim)
         # 可选：添加第二个注意力层和resnet块
-        # self.attn2 = SpatialTransformer(channels, context_dim, num_heads=channels//64, self_attn=True, cross_attn=True)  # 256/64=4
-        # self.resnet3 = ResnetBlock(channels, channels, time_dim)
+        self.attn2 = SpatialTransformer(channels, context_dim, num_heads=channels//64, self_attn=True, cross_attn=True)  # 256/64=4
+        self.resnet3 = ResnetBlock(channels, channels, time_dim)
 
     def forward(self, x, t, context):
         x = self.resnet1(x, t)
         x = self.attn1(x, t, context)
         x = self.resnet2(x, t)
-        # x = self.attn2(x, context)
-        # x = self.resnet3(x, t)
+        x = self.attn2(x, t, context)
+        x = self.resnet3(x, t)
         return x
 
 
@@ -232,7 +232,7 @@ class UNet_Transformer(nn.Module):
         )  # 64 x H x W
 
         # 下采样
-        self.down1 = self._down_block(64, 128, time_dim)  # 128 x H/2 x W/2
+        self.down1 = self._down_block(64, 128, time_dim, self_attn=True, cross_attn=False, num_heads=4, context_dim=context_dim)  # 128 x H/2 x W/2
         self.down2 = self._down_block(128, 256, time_dim, self_attn=True, cross_attn=False, num_heads=4, context_dim=context_dim)  # 256 x H/4 x W/4
         self.down3 = self._down_block(256, 512, time_dim, self_attn=True, cross_attn=False, num_heads=8, context_dim=context_dim)  # 512 x H/8 x W/8
 
@@ -242,7 +242,7 @@ class UNet_Transformer(nn.Module):
         # 上采样
         self.up1 = self._up_conv(512, 256, time_dim, self_attn=True, cross_attn=True, num_heads=8, context_dim=context_dim)  # 256 x H/4 x W/4
         self.up2 = self._up_conv(256+256, 128, time_dim, self_attn=True, cross_attn=True, num_heads=4, context_dim=context_dim)  # 128 x H/2 x W/2
-        self.up3 = self._up_conv(128+128, 64, time_dim)  # 64 x H x W
+        self.up3 = self._up_conv(128+128, 64, time_dim, self_attn=True, cross_attn=True, num_heads=4, context_dim=context_dim)  # 64 x H x W
 
         # 最终卷积
         self.final_conv = nn.Sequential(
@@ -424,4 +424,34 @@ def sample(model, x_t, noise_scheduler, t, text_embeddings):
     return x
 
 
+class DDIMSampler:
+    def __init__(self, model, n_steps=50, device="cuda"):
+        self.model = model
+        self.n_steps = n_steps
+        self.device = device
 
+    @torch.no_grad()
+    def sample(self, noise, context, guidance_scale=3.0):
+        # Assuming your noise scheduler is accessible via model.noise_scheduler
+        scheduler = self.model.noise_scheduler
+
+        # Initialize x_t with pure noise
+        x = noise
+
+        for i in reversed(range(0, scheduler.num_timesteps, scheduler.num_timesteps // self.n_steps)):
+            t = torch.full((noise.shape[0],), i, device=self.device, dtype=torch.long)
+
+            # For classifier-free guidance
+            noise_pred_uncond = self.model.unet(x, t, y=torch.zeros_like(context))
+            noise_pred_cond = self.model.unet(x, t, y=context)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+
+            # DDIM update step
+            alpha_prod_t = scheduler.alphas_cumprod[t]
+            alpha_prod_t_prev = scheduler.alphas_cumprod[t-1] if i > 0 else torch.ones_like(alpha_prod_t)
+
+            pred_x0 = (x - torch.sqrt(1 - alpha_prod_t) * noise_pred) / torch.sqrt(alpha_prod_t)
+            dir_xt = torch.sqrt(1 - alpha_prod_t_prev - scheduler.betas[t]) * noise_pred
+            x = torch.sqrt(alpha_prod_t_prev) * pred_x0 + dir_xt
+
+        return x
